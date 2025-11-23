@@ -1,0 +1,15 @@
+# Build artifacts
+tensorcad
+*.o
+*.out
+
+# Generated files
+output.ppm
+*.ppm
+
+# STL files (typically user data)
+*.STL
+*.stl
+
+# System files
+.DS_Store
