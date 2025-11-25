@@ -1,11 +1,15 @@
 # Build artifacts
 tensorcad
+assembly_designer
 *.o
 *.out
 
 # Generated files
 output.ppm
+assembly_output.ppm
+assembly_3view.png
 *.ppm
+*.png
 
 # STL files (typically user data)
 *.STL

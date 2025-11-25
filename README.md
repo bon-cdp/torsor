@@ -1,12 +1,22 @@
-# TensorCAD
+# Torsor
 
-**Parametric CAD + Analytical Stress Analysis**
+**Parametric CAD + Analytical Stress Analysis + Assembly Design**
 
 A revolutionary approach to engineering CAD that combines algebraic geometry with analytical stress calculations, eliminating the need for iterative FEA for simple structural analysis.
 
+## What's New in v0.3
+
+🎉 **Modular Architecture**: Refactored into reusable header files (core, geometry, assembly, render)
+
+🔧 **Assembly Design Tool**: Interactive CLI for selecting shaft/bearing/channel/bolt combinations
+
+📐 **NASA TM-87354**: Shaft fatigue analysis with Marin factors and Modified Goodman criterion
+
+🏗️ **AISC Integration**: Real component catalogs (C-channels, Sealmaster bearings)
+
 ## Concept
 
-TensorCAD treats geometry as **algebraic functions** (Signed Distance Fields) rather than triangle meshes. This enables:
+Torsor treats geometry as **algebraic functions** (Signed Distance Fields) rather than triangle meshes. This enables:
 
 - **Parametric design**: Change a dimension, everything updates instantly
 - **Analytical solutions**: Apply Roark's formulas directly without meshing
@@ -34,16 +44,48 @@ Joints are **geometric intersections**, not separate entities:
 
 ## Build & Run
 
-```bash
-# Compile
-clang++ -std=c++20 -O3 main.cpp -o tensorcad
+### Using Makefile (Recommended)
 
-# Run
+```bash
+# Build both tools
+make
+
+# Run geometric modeling tool
 ./tensorcad
 
-# View output (ParaView or any PPM viewer)
+# Run assembly design tool
+./assembly_designer
+
+# View geometric output (ParaView or any PPM viewer)
 open output.ppm
 ```
+
+### Manual Compilation
+
+```bash
+# Geometric tool
+clang++ -std=c++20 -O3 main.cpp -o tensorcad
+
+# Assembly designer
+clang++ -std=c++20 -O3 assembly_designer.cpp -o assembly_designer
+```
+
+## Tools
+
+### 1. Geometric Modeling (`./tensorcad`)
+- Parametric geometry using SDFs
+- Analytical section properties
+- Roark's stress formulas
+- 3D raymarching visualization
+- Outputs: PPM render
+
+### 2. Assembly Designer (`./assembly_designer`)
+- Interactive CLI for component selection
+- Shaft-bearing-channel-bolt assemblies
+- NASA TM-87354 shaft fatigue analysis
+- AISC beam bending checks
+- Bolt shear verification
+- Outputs: Final specification report
 
 ## Example Output
 
@@ -74,9 +116,25 @@ This is **MathCAD for 3D**.
 ## Tech Stack
 
 - **Language**: C++20 (concepts, templates)
+- **Architecture**: Modular headers (core, geometry, assembly, render)
 - **Math**: Dual numbers for automatic differentiation
 - **Rendering**: Raymarching through SDFs
 - **Output**: Binary PPM (ParaView compatible)
+- **Build System**: Makefile with multiple executables
+
+## File Structure
+
+```
+tensorcad/
+├── tensorcad_core.h          # Dual numbers, concepts
+├── tensorcad_geometry.h       # Primitives, boolean ops, ChannelBeam
+├── tensorcad_assembly.h       # Roark's formulas
+├── tensorcad_render.h         # Raymarching, camera
+├── main.cpp                   # Geometric modeling tool
+├── assembly_designer.cpp      # Assembly design tool
+├── Makefile                   # Build system
+└── README.md, LESSONS.md      # Documentation
+```
 
 ## Theory
 
@@ -96,10 +154,14 @@ Based on:
 
 ## Author
 
-Built in one Saturday night by bon-cdp, combining:
+Built by bon-cdp over one weekend:
+- **v0.1-0.2** (Saturday night): Geometric kernel, Roark's formulas, SDF rendering
+- **v0.3** (Sunday evening): Modular architecture, assembly design tool, NASA fatigue analysis
+
+Combining:
 - Industrial automation experience (Orin/Lexium/PyComm)
 - Sheaf theory research (algebraic learning)
-- Engineering knowledge (Roark's formulas)
+- Engineering knowledge (Roark's formulas, NASA TM-87354)
 - Modern C++ expertise (Google HEIR)
 
 ---
