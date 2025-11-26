@@ -1,6 +1,7 @@
 # Build artifacts
 tensorcad
 assembly_designer
+vortex
 *.o
 *.out
 
