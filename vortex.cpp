@@ -21,24 +21,81 @@
 using namespace ftxui;
 
 // ============================================================================
+// COLOR MAPPING SYSTEM
+// ============================================================================
+
+enum class ColorVariable {
+    UDL,      // Uniform distributed load (kN/m)
+    MOMENT,   // Bending moment (kN·m)
+    STRESS    // Bending stress (MPa)
+};
+
+// Map normalized value [0,1] to color (Blue → Green → Yellow → Red)
+inline Color value_to_color(double normalized) {
+    if (normalized < 0.2) return Color::Blue;
+    else if (normalized < 0.4) return Color::Cyan;
+    else if (normalized < 0.6) return Color::Green;
+    else if (normalized < 0.8) return Color::Yellow;
+    else return Color::Red;
+}
+
+// Get value at normalized position x along beam for given color variable
+inline double get_value_at_position(const ModeResult& mode, double x_norm, ColorVariable var) {
+    if (mode.distribution.x_m.empty()) return 0.0;
+
+    size_t idx = static_cast<size_t>(x_norm * (mode.distribution.x_m.size() - 1));
+    if (idx >= mode.distribution.x_m.size()) idx = mode.distribution.x_m.size() - 1;
+
+    switch (var) {
+        case ColorVariable::UDL:
+            return mode.distribution.udl_kN_m;  // Constant along beam
+        case ColorVariable::MOMENT:
+            return mode.distribution.moment_kNm[idx];
+        case ColorVariable::STRESS:
+            return mode.distribution.stress_MPa[idx];
+        default:
+            return 0.0;
+    }
+}
+
+// Get maximum value for color variable across all modes
+inline double get_max_value(const std::vector<ModeResult>& modes, ColorVariable var) {
+    double max_val = 0.0;
+    for (const auto& mode : modes) {
+        switch (var) {
+            case ColorVariable::UDL:
+                max_val = std::max(max_val, mode.distribution.udl_kN_m);
+                break;
+            case ColorVariable::MOMENT:
+                max_val = std::max(max_val, mode.distribution.max_moment_kNm);
+                break;
+            case ColorVariable::STRESS:
+                max_val = std::max(max_val, mode.distribution.max_stress_MPa);
+                break;
+        }
+    }
+    return max_val;
+}
+
+// ============================================================================
 // APPLICATION STATE
 // ============================================================================
 
 struct AppState {
-    // Input parameters
+    // Input parameters (METRIC UNITS)
     int material_index = 0;
-    double D = 8.0;              // inches
-    double t = 0.25;             // inches
-    double L = 240.0;            // inches (20 feet)
+    double D_mm = 200.0;         // Outer diameter (mm)
+    double t_mm = 6.0;           // Wall thickness (mm)
+    double L_m = 6.0;            // Length (m)
     double damping = 0.01;       // 1% damping (typical for steel)
 
     // Custom material (if selected)
-    double custom_E = 29.0e6;
-    double custom_rho = 0.284;
+    double custom_E_GPa = 200.0;       // Young's modulus (GPa)
+    double custom_rho = 7850.0;        // Density (kg/m³)
 
     // UI state
-    int active_input = 0;        // Which input field is active
-    int color_variable = 0;      // 0=deflection, 1=moment, 2=stress, 3=UDL
+    int active_input = 0;             // Which input field is active
+    ColorVariable active_color_var = ColorVariable::STRESS;  // Start with stress
 
     // Results
     HSS_Member member;
@@ -50,13 +107,13 @@ struct AppState {
         if (static_cast<size_t>(material_index) < MATERIALS.size() - 1) {
             member.material = MATERIALS[material_index];
         } else {
-            member.material = {"Custom", custom_E, custom_rho};
+            member.material = {"Custom", custom_E_GPa, custom_rho};
         }
 
-        // Set geometry
-        member.D = D;
-        member.t = t;
-        member.L = L;
+        // Set geometry (metric)
+        member.D_mm = D_mm;
+        member.t_mm = t_mm;
+        member.L_m = L_m;
         member.damping_ratio = damping;
 
         // Calculate derived properties
@@ -119,16 +176,20 @@ Element render_mode_shape(const std::string& bc_name, int mode, double max_defle
     return ftxui::canvas(std::move(canvas));
 }
 
-// Middle panel: Modal shapes for all boundary conditions
+// Middle panel: Modal shapes with auto-scaling and color mapping
 Element render_visualizations(const AppState& state) {
     if (state.results.empty()) {
         return text("Calculating...") | center;
     }
 
-    // Color for each mode
-    std::vector<Color> mode_colors = {Color::Green, Color::Blue, Color::Magenta};
-
     std::vector<Element> bc_panels;
+
+    // Get max value for color mapping across ALL boundary conditions
+    double global_max_value = 0.0;
+    for (const auto& result : state.results) {
+        double bc_max = get_max_value(result.modes, state.active_color_var);
+        global_max_value = std::max(global_max_value, bc_max);
+    }
 
     for (const auto& result : state.results) {
         std::vector<Element> mode_shapes;
@@ -136,53 +197,132 @@ Element render_visualizations(const AppState& state) {
         // Title
         mode_shapes.push_back(text(result.bc_name) | bold | color(Color::Cyan) | center);
 
-        // Draw each mode overlaid
-        auto combined_canvas = Canvas(30 * 2, 10 * 4);
-        int baseline_y = 10 * 4 / 2;
+        // Calculate auto-scaling factor for this BC
+        double max_deflection = 0.0;
+        for (const auto& mode_res : result.modes) {
+            for (int x = 0; x <= 100; x++) {
+                double x_norm = x / 100.0;
+                double deflection = VortexPhysics::modal_shape(x_norm, 1.0, result.bc_name, mode_res.mode_number);
+                max_deflection = std::max(max_deflection, std::abs(deflection));
+            }
+        }
+
+        // Canvas setup
+        constexpr int canvas_width = 30;
+        constexpr int canvas_height = 10;
+        auto combined_canvas = Canvas(canvas_width * 2, canvas_height * 4);
+        int baseline_y = canvas_height * 4 / 2;
+
+        // Scale factor to fit modes in canvas (use 80% of height)
+        double scale_factor = max_deflection > 0 ? (canvas_height * 4 * 0.4) / max_deflection : 1.0;
 
         // Draw baseline
-        for (int x = 0; x < 30 * 2; x++) {
+        for (int x = 0; x < canvas_width * 2; x++) {
             combined_canvas.DrawPointLine(x, baseline_y, x, baseline_y, Color::GrayDark);
         }
 
-        // Overlay modes
-        for (size_t mode_idx = 0; mode_idx < result.modes.size(); mode_idx++) {
-            int mode = result.modes[mode_idx].mode_number;
-            Color mode_color = mode_colors[mode_idx % mode_colors.size()];
+        // Draw modes with color mapping
+        for (const auto& mode_res : result.modes) {
+            int mode = mode_res.mode_number;
 
-            for (int x = 0; x < 30 * 2 - 1; x++) {
-                double x_norm = static_cast<double>(x) / (30 * 2);
-                double x_next = static_cast<double>(x + 1) / (30 * 2);
+            for (int x = 0; x < canvas_width * 2 - 1; x++) {
+                double x_norm = static_cast<double>(x) / (canvas_width * 2);
+                double x_next = static_cast<double>(x + 1) / (canvas_width * 2);
 
+                // Get modal deflections
                 double y1 = VortexPhysics::modal_shape(x_norm, 1.0, result.bc_name, mode);
                 double y2 = VortexPhysics::modal_shape(x_next, 1.0, result.bc_name, mode);
 
-                int canvas_y1 = baseline_y - static_cast<int>(y1 * 8);
-                int canvas_y2 = baseline_y - static_cast<int>(y2 * 8);
+                // Scale to canvas
+                int canvas_y1 = baseline_y - static_cast<int>(y1 * scale_factor);
+                int canvas_y2 = baseline_y - static_cast<int>(y2 * scale_factor);
 
-                combined_canvas.DrawPointLine(x, canvas_y1, x + 1, canvas_y2, mode_color);
+                // Get color based on value at this position
+                double value = get_value_at_position(mode_res, x_norm, state.active_color_var);
+                double normalized = global_max_value > 0 ? value / global_max_value : 0.0;
+                Color line_color = value_to_color(normalized);
+
+                // Draw colored line
+                combined_canvas.DrawPointLine(x, canvas_y1, x + 1, canvas_y2, line_color);
             }
         }
 
         mode_shapes.push_back(ftxui::canvas(std::move(combined_canvas)));
 
-        // Mode legends
-        for (size_t i = 0; i < result.modes.size(); i++) {
-            const auto& mode_res = result.modes[i];
-            Color mode_color = mode_colors[i % mode_colors.size()];
+        // Mode info with max deflection
+        std::ostringstream scale_info;
+        scale_info << "Max deflection: " << std::fixed << std::setprecision(3) << max_deflection;
+        mode_shapes.push_back(text(scale_info.str()) | color(Color::GrayLight) | dim);
 
+        // Mode legends
+        for (const auto& mode_res : result.modes) {
             std::ostringstream oss;
             oss << "Mode " << mode_res.mode_number << ": "
                 << std::fixed << std::setprecision(1) << mode_res.freq_hz << " Hz, "
-                << std::fixed << std::setprecision(0) << (mode_res.V_critical * 0.0568182) << " mph";
+                << std::fixed << std::setprecision(1) << mode_res.V_critical_ms << " m/s";
 
-            mode_shapes.push_back(text(oss.str()) | color(mode_color));
+            mode_shapes.push_back(text(oss.str()) | color(Color::GrayLight));
         }
 
         bc_panels.push_back(vbox(mode_shapes) | border);
     }
 
     return hbox(bc_panels) | center;
+}
+
+// Color legend panel
+Element render_color_legend(const AppState& state) {
+    // Get variable name and units
+    std::string var_name, units;
+    double max_value = 0.0;
+
+    // Get max across all results
+    for (const auto& result : state.results) {
+        double bc_max = get_max_value(result.modes, state.active_color_var);
+        max_value = std::max(max_value, bc_max);
+    }
+
+    switch (state.active_color_var) {
+        case ColorVariable::UDL:
+            var_name = "UDL";
+            units = "kN/m";
+            break;
+        case ColorVariable::MOMENT:
+            var_name = "MOMENT";
+            units = "kN·m";
+            break;
+        case ColorVariable::STRESS:
+            var_name = "STRESS";
+            units = "MPa";
+            break;
+    }
+
+    // Create gradient bar
+    std::vector<Element> gradient;
+    for (int i = 0; i < 20; i++) {
+        double norm = static_cast<double>(i) / 19.0;
+        Color c = value_to_color(norm);
+        gradient.push_back(text("█") | color(c));
+    }
+
+    // Format max value
+    std::ostringstream max_str;
+    max_str << std::fixed << std::setprecision(2) << max_value << " " << units;
+
+    return vbox({
+        hbox({
+            text("Showing: ") | color(Color::GrayLight),
+            text(var_name) | bold | color(Color::Yellow),
+            text(" (" + units + ")") | color(Color::GrayLight),
+            text("  [Space to cycle]") | color(Color::GrayDark)
+        }) | center,
+        hbox(gradient) | center,
+        hbox({
+            text("0.0 " + units) | color(Color::GrayLight),
+            text(" ──────────── ") | color(Color::GrayDark),
+            text(max_str.str()) | color(Color::GrayLight)
+        }) | center
+    }) | border;
 }
 
 // Bottom panel: Inputs and outputs
@@ -192,9 +332,9 @@ Element render_inputs(const AppState& state) {
                         : "Custom";
 
     std::ostringstream oss_D, oss_t, oss_L, oss_damp;
-    oss_D << std::fixed << std::setprecision(3) << state.D;
-    oss_t << std::fixed << std::setprecision(3) << state.t;
-    oss_L << std::fixed << std::setprecision(1) << state.L;
+    oss_D << std::fixed << std::setprecision(1) << state.D_mm;
+    oss_t << std::fixed << std::setprecision(2) << state.t_mm;
+    oss_L << std::fixed << std::setprecision(1) << state.L_m;
     oss_damp << std::fixed << std::setprecision(4) << state.damping;
 
     auto highlight_if_active = [&](int index, const std::string& label, const std::string& value) {
@@ -214,25 +354,25 @@ Element render_inputs(const AppState& state) {
         hbox({
             vbox({
                 highlight_if_active(0, "Material", material_name),
-                highlight_if_active(1, "Diameter (D)", oss_D.str() + " in"),
-                highlight_if_active(2, "Thickness (t)", oss_t.str() + " in"),
+                highlight_if_active(1, "Diameter (D)", oss_D.str() + " mm"),
+                highlight_if_active(2, "Thickness (t)", oss_t.str() + " mm"),
             }) | flex,
             separator(),
             vbox({
-                highlight_if_active(3, "Length (L)", oss_L.str() + " in"),
+                highlight_if_active(3, "Length (L)", oss_L.str() + " m"),
                 highlight_if_active(4, "Damping (ζ)", oss_damp.str()),
                 text(""),
             }) | flex,
             separator(),
             vbox({
                 text("Calculated:") | color(Color::GrayLight),
-                text("  I = " + std::to_string(state.member.I).substr(0, 6) + " in⁴") | color(Color::GrayLight),
-                text("  A = " + std::to_string(state.member.A).substr(0, 6) + " in²") | color(Color::GrayLight),
-                text("  μ = " + std::to_string(state.member.mu).substr(0, 6) + " lb/in") | color(Color::GrayLight),
+                text("  I = " + std::to_string(state.member.I_m4 * 1e12).substr(0, 6) + " mm⁴") | color(Color::GrayLight),
+                text("  A = " + std::to_string(state.member.A_m2 * 1e6).substr(0, 6) + " mm²") | color(Color::GrayLight),
+                text("  μ = " + std::to_string(state.member.mu_kg_m).substr(0, 6) + " kg/m") | color(Color::GrayLight),
             }) | flex
         }),
         separator(),
-        text("q=quit  h=help  s=save") | color(Color::GrayDark) | center
+        text("q=quit  Space=color  Tab=input  ↑↓=adjust") | color(Color::GrayDark) | center
     }) | border;
 }
 
@@ -254,6 +394,8 @@ int main() {
             separator(),
             render_visualizations(state) | flex,
             separator(),
+            render_color_legend(state),
+            separator(),
             render_inputs(state)
         });
     });
@@ -272,9 +414,19 @@ int main() {
             return true;
         }
 
-        // Shift: cycle color variable
-        if (event == Event::Character(' ')) {  // Using space as shift substitute for now
-            state.color_variable = (state.color_variable + 1) % 4;
+        // Space: cycle color variable (UDL → Moment → Stress)
+        if (event == Event::Character(' ')) {
+            switch (state.active_color_var) {
+                case ColorVariable::UDL:
+                    state.active_color_var = ColorVariable::MOMENT;
+                    break;
+                case ColorVariable::MOMENT:
+                    state.active_color_var = ColorVariable::STRESS;
+                    break;
+                case ColorVariable::STRESS:
+                    state.active_color_var = ColorVariable::UDL;
+                    break;
+            }
             return true;
         }
 
@@ -284,9 +436,9 @@ int main() {
         if (event == Event::ArrowUp) {
             switch (state.active_input) {
                 case 0: state.material_index = (state.material_index + 1) % MATERIALS.size(); break;
-                case 1: state.D += 0.5; break;
-                case 2: state.t += 0.01; break;
-                case 3: state.L += 12.0; break;
+                case 1: state.D_mm += 10.0; break;     // Increment by 10mm
+                case 2: state.t_mm += 0.5; break;      // Increment by 0.5mm
+                case 3: state.L_m += 0.5; break;       // Increment by 0.5m
                 case 4: state.damping += 0.001; break;
             }
             changed = true;
@@ -295,9 +447,9 @@ int main() {
         if (event == Event::ArrowDown) {
             switch (state.active_input) {
                 case 0: state.material_index = (state.material_index - 1 + MATERIALS.size()) % MATERIALS.size(); break;
-                case 1: if (state.D > 1.0) state.D -= 0.5; break;
-                case 2: if (state.t > 0.01) state.t -= 0.01; break;
-                case 3: if (state.L > 12.0) state.L -= 12.0; break;
+                case 1: if (state.D_mm > 20.0) state.D_mm -= 10.0; break;
+                case 2: if (state.t_mm > 1.0) state.t_mm -= 0.5; break;
+                case 3: if (state.L_m > 1.0) state.L_m -= 0.5; break;
                 case 4: if (state.damping > 0.001) state.damping -= 0.001; break;
             }
             changed = true;

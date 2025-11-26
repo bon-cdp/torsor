@@ -18,15 +18,17 @@ const double PI = 3.14159265358979323846;
 
 struct Material {
     std::string name;
-    double E_psi;              // Young's modulus (psi)
-    double density_lb_in3;     // Density (lb/in³)
+    double E_GPa;              // Young's modulus (GPa) - input unit
+    double density_kg_m3;      // Density (kg/m³)
 };
 
-// Standard structural steel materials
+// Standard structural steel materials (metric SI units)
 const std::vector<Material> MATERIALS = {
-    {"A36 Steel", 29.0e6, 0.284},
-    {"A572-50 Steel", 29.0e6, 0.284},
-    {"A500 Grade B HSS", 29.0e6, 0.284},
+    {"A36 Steel", 200.0, 7850.0},        // E = 200 GPa, ρ = 7850 kg/m³
+    {"A572-50 Steel", 200.0, 7850.0},
+    {"A500 Grade B HSS", 200.0, 7850.0},
+    {"Stainless 316", 193.0, 8000.0},
+    {"Aluminum 6061", 68.9, 2700.0},
     {"Custom", 0.0, 0.0}  // User-defined
 };
 
@@ -36,16 +38,20 @@ const std::vector<Material> MATERIALS = {
 
 struct BoundaryCondition {
     std::string name;
-    std::vector<double> A_coeffs;  // A coefficients for each mode (1-indexed)
+    std::vector<double> A_coeffs;  // A coefficients for each mode (1-indexed, mode 0 unused)
 
-    // TODO: Complete table from reference
-    // Currently using provided values for modes 1 and 2
+    // From reference: "Beams of Uniform Section and Uniformly Distributed Load"
+    // ω_n = A√(EI/μL⁴) RAD/SEC
+    // Complete table for modes 1-5
 };
 
 const std::vector<BoundaryCondition> BOUNDARY_CONDITIONS = {
-    {"Fixed-Hinged", {0.0, 15.4, 50.0}},      // Mode 0 (unused), Mode 1, Mode 2
-    {"Fixed-Fixed",  {0.0, 22.4, 61.7}},
-    {"Hinged-Hinged", {0.0, 9.87, 39.5}}
+    {"Fixed-Free (Cantilever)", {0.0, 3.52, 22.0, 61.7, 121.0, 200.0}},
+    {"Hinged-Hinged (Simple)", {0.0, 9.87, 39.5, 88.9, 158, 247}},
+    {"Fixed-Fixed (Built-in)", {0.0, 22.4, 61.7, 121, 200, 298}},
+    {"Free-Free", {0.0, 22.4, 61.7, 121, 200, 298}},
+    {"Fixed-Hinged", {0.0, 15.4, 50.0, 104, 178, 272}},
+    {"Hinged-Free", {0.0, 15.4, 50.0, 104, 178, 272}}
 };
 
 // ============================================================================
@@ -53,39 +59,42 @@ const std::vector<BoundaryCondition> BOUNDARY_CONDITIONS = {
 // ============================================================================
 
 struct HSS_Member {
-    // Geometric properties
-    double D;              // Outer diameter (in)
-    double t;              // Wall thickness (in)
-    double L;              // Length (in)
+    // Geometric properties (INPUT units for user convenience)
+    double D_mm;           // Outer diameter (mm)
+    double t_mm;           // Wall thickness (mm)
+    double L_m;            // Length (m)
 
     // Material properties
     Material material;
 
-    // Derived properties (calculated)
-    double I;              // Moment of inertia (in⁴)
-    double A;              // Cross-sectional area (in²)
-    double mu;             // Mass per unit length (lb·s²/in² = lbm/in in consistent units)
-    double r_gyration;     // Radius of gyration (in)
+    // Derived properties (INTERNAL calculation in base SI: meters, kilograms)
+    double I_m4;           // Moment of inertia (m⁴) - for calculation
+    double A_m2;           // Cross-sectional area (m²) - for calculation
+    double mu_kg_m;        // Mass per unit length (kg/m)
+    double r_gyration_mm;  // Radius of gyration (mm) - for display
 
     // Dynamic properties
     double damping_ratio;  // Damping ratio (ζ, dimensionless, typically 0.001-0.02 for steel)
 
     // Calculate derived properties
     void calculate_properties() {
-        // Area: A = π(D²-(D-2t)²)/4 = π(D² - D² + 4Dt - 4t²)/4 = πt(D-t)
-        double D_inner = D - 2.0 * t;
-        A = PI * (D*D - D_inner*D_inner) / 4.0;  // in²
+        // Convert inputs to base SI (meters)
+        double D_m = D_mm / 1000.0;       // mm → m
+        double t_m = t_mm / 1000.0;       // mm → m
+        double D_inner_m = D_m - 2.0 * t_m;
+
+        // Area: A = π(D²-(D-2t)²)/4
+        A_m2 = PI * (D_m*D_m - D_inner_m*D_inner_m) / 4.0;  // m²
 
         // Moment of inertia: I = π(D⁴-(D-2t)⁴)/64
-        I = PI * (std::pow(D, 4) - std::pow(D_inner, 4)) / 64.0;  // in⁴
+        I_m4 = PI * (std::pow(D_m, 4) - std::pow(D_inner_m, 4)) / 64.0;  // m⁴
 
-        // Mass per unit length: μ = ρ * A (lb/in)
-        // Note: In FPS system with g = 386.4 in/s², to get consistent units for dynamics:
-        // μ in dynamics equation has units lb·s²/in (divide by g to get from lbf to lbm)
-        mu = material.density_lb_in3 * A;  // lb/in (mass per unit length)
+        // Mass per unit length: μ = ρ * A
+        // ρ in kg/m³, A in m² → μ in kg/m
+        mu_kg_m = material.density_kg_m3 * A_m2;  // kg/m
 
-        // Radius of gyration: r = sqrt(I/A)
-        r_gyration = std::sqrt(I / A);  // in
+        // Radius of gyration (convert back to mm for display)
+        r_gyration_mm = std::sqrt(I_m4 / A_m2) * 1000.0;  // m → mm
     }
 };
 
@@ -93,19 +102,32 @@ struct HSS_Member {
 // VORTEX SHEDDING RESULTS
 // ============================================================================
 
+// Distribution results for visualization
+struct DistributionData {
+    std::vector<double> x_m;           // Position along beam (m)
+    std::vector<double> moment_kNm;    // Bending moment M(x) (kN·m)
+    std::vector<double> stress_MPa;    // Bending stress σ(x) (MPa)
+    double udl_kN_m;                   // Equivalent uniform distributed load (kN/m)
+    double max_moment_kNm;             // Maximum moment
+    double max_stress_MPa;             // Maximum stress
+};
+
 struct ModeResult {
     int mode_number;
     double omega;              // Natural frequency (rad/s)
     double freq_hz;            // Natural frequency (Hz)
-    double V_critical;         // Critical wind speed (in/s, convert to mph for display)
-    double F_static;           // Static force approximation (lb)
+    double V_critical_ms;      // Critical wind speed (m/s)
+    double F_static_kN;        // Static force approximation (kN)
     double omega_axial;        // Natural frequency with axial load (rad/s)
     double amplification;      // Dynamic amplification factor |H(f)|
 
     // Intermediate calculations (for visualization)
-    double omega_D2;           // ωD² parameter for Strouhal number selection
-    double qh;                 // Velocity pressure (psi)
-    double alpha;              // Axial load parameter
+    double omega_D2;           // ωD² parameter for Strouhal number selection (m²·rad/s)
+    double qh_Pa;              // Velocity pressure (Pa)
+    double alpha;              // Axial load parameter (dimensionless)
+
+    // Distribution data for color mapping
+    DistributionData distribution;
 };
 
 struct VortexResults {
@@ -121,57 +143,52 @@ namespace VortexPhysics {
 
 // Calculate natural frequency for a given mode
 // ω = A * sqrt(E * I / (μ * L⁴))
-// Units: [rad/s] = [1] * sqrt([psi]*[in⁴] / ([lb/in]*[in⁴]))
-//                = sqrt([lb/in²]*[in⁴] / ([lb/in]*[in⁴]))
-//                = sqrt([lb*in³] / [lb*in⁵])
-//                = sqrt(1/[in²]) = 1/[in] × sqrt([in²/s²]) → need to check!
-// Actually: E in psi, μ needs to be in (lb·s²/in)/in = lb·s²/in²
-inline double calculate_natural_frequency(double E, double I, double mu, double L, double A_coeff) {
-    // Convert mu from lb/in to lb·s²/in² (divide by g = 386.4 in/s²)
-    double mu_dynamic = mu / 386.4;  // lb·s²/in²
-
-    // ω = A * sqrt(E*I / (mu*L⁴))
-    double omega = A_coeff * std::sqrt(E * I / (mu_dynamic * std::pow(L, 4)));
+// Units (SI): [rad/s] = [1] * sqrt([Pa]*[m⁴] / ([kg/m]*[m⁴]))
+//                     = sqrt([N/m²]*[m⁴] / ([kg/m]*[m⁴]))
+//                     = sqrt([kg·m/s²/m²]*[m⁴] / ([kg]*[m³]))
+//                     = sqrt([kg·m³/s²] / [kg·m³])
+//                     = sqrt(1/s²) = rad/s ✓
+inline double calculate_natural_frequency(double E_Pa, double I_m4, double mu_kg_m, double L_m, double A_coeff) {
+    // ω = A * sqrt(E*I / (μ*L⁴))
+    double omega = A_coeff * std::sqrt(E_Pa * I_m4 / (mu_kg_m * std::pow(L_m, 4)));
     return omega;  // rad/s
 }
 
 // Calculate critical wind speed using Strouhal number approach
 // Different formulas based on ωD² value
-inline double calculate_critical_wind_speed(double omega, double D) {
-    double omega_D2 = omega * D * D;  // (rad/s) * in² = in²·rad/s
+// Note: D must be in meters for this calculation
+inline double calculate_critical_wind_speed(double omega, double D_m) {
+    double omega_D2 = omega * D_m * D_m;  // (rad/s) * m² = m²·rad/s
 
-    double V;  // in/s
+    double V;  // m/s
 
     if (omega_D2 <= 0.5) {
-        V = 6.0 * omega * D;
+        V = 6.0 * omega * D_m;
     } else if (omega_D2 < 0.75) {
-        V = 3.0 * omega * D + 1.5 / D;
+        V = 3.0 * omega * D_m + 1.5 / D_m;
     } else {
-        V = 5.0 * omega * D;
+        V = 5.0 * omega * D_m;
     }
 
-    return V;  // in/s
+    return V;  // m/s
 }
 
 // Calculate static force approximation from vortex shedding
 // F = C1 / (sqrt(L/D) * (ζ - C2*(ρ*D²)/M)^0.5) * qh * D
-// where qh = 0.6 * V²
-inline double calculate_static_force(double V, double D, double L, double damping, double mu, double rho_air = 7.346e-5) {
+// where qh = 0.5 * ρ * V²
+// All inputs in SI base units (m, kg, m/s, kg/m³), output in N (convert to kN)
+inline double calculate_static_force(double V_ms, double D_m, double L_m, double damping, double mu_kg_m, double rho_air_kg_m3 = 1.225) {
     // Constants
     const double C1 = 3.0;
     const double C2 = 0.6;
 
-    // Velocity pressure: qh = 0.6 * V² (assuming air density incorporated)
-    // Standard: qh = 0.5 * ρ * V², but formula uses 0.6*V² empirically
-    double qh = 0.6 * V * V;  // (in/s)² - needs density factor
-
-    // Air density at sea level: approximately 0.0765 lb/ft³ = 4.43e-5 lb/in³
-    // Actually using dynamic pressure in psi: qh = 0.5 * rho * V² where rho ~ 7.346e-5 lb·s²/in⁴
-    qh = 0.5 * rho_air * V * V;  // psi
+    // Air density at sea level: 1.225 kg/m³
+    // Velocity pressure: qh = 0.5 * ρ * V² (Pa = N/m²)
+    double qh = 0.5 * rho_air_kg_m3 * V_ms * V_ms;  // Pa
 
     // Denominator calculation
-    double sqrt_L_D = std::sqrt(L / D);
-    double mass_term = C2 * rho_air * D * D / mu;
+    double sqrt_L_D = std::sqrt(L_m / D_m);
+    double mass_term = C2 * rho_air_kg_m3 * D_m * D_m / mu_kg_m;
     double denom_inner = damping - mass_term;
 
     // Handle case where damping is very low
@@ -181,17 +198,21 @@ inline double calculate_static_force(double V, double D, double L, double dampin
 
     double denom = sqrt_L_D * std::sqrt(denom_inner);
 
-    // Static force
-    double F = (C1 / denom) * qh * D;  // lb
+    // Static force: F = (C1 / denom) * qh * D
+    // Units: [1/(1·1)] * [Pa] * [m] = [N/m²] * [m] = N/m → multiply by length to get N
+    // Actually: [1] * [Pa] * [m] = [N/m²] * [m] = N/m (force per unit length)
+    // For total force, multiply by length
+    double F_N = (C1 / denom) * qh * D_m * L_m;  // N
 
-    return F;
+    return F_N;  // N (will convert to kN for display)
 }
 
 // Calculate natural frequency with axial load effect
 // ω_a = ω * sqrt(1 ± α²/n²)
 // α = F*L²/(E*I*π²)
-inline double calculate_axial_frequency(double omega, double F, double L, double E, double I, int mode) {
-    double alpha_squared = (F * L * L) / (E * I * PI * PI);
+// All inputs in SI base units
+inline double calculate_axial_frequency(double omega, double F_N, double L_m, double E_Pa, double I_m4, int mode) {
+    double alpha_squared = (F_N * L_m * L_m) / (E_Pa * I_m4 * PI * PI);
     double mode_squared = mode * mode;
 
     // Use + for tension, - for compression
@@ -201,12 +222,13 @@ inline double calculate_axial_frequency(double omega, double F, double L, double
     if (factor < 0) factor = 0;  // Can't have imaginary frequency
 
     double omega_axial = omega * std::sqrt(factor);
-    return omega_axial;
+    return omega_axial;  // rad/s
 }
 
 // Calculate dynamic amplification factor for SDOF system
 // |H(f)| = 1 / sqrt((1-r²)² + (2ζr)²)
 // where r = f/fn (frequency ratio), typically use r = 1 for maximum
+// From Figure 7: SDOF Dynamic amplification factor
 inline double calculate_amplification(double damping, double freq_ratio = 1.0) {
     double r = freq_ratio;
     double zeta = damping;
@@ -219,54 +241,140 @@ inline double calculate_amplification(double damping, double freq_ratio = 1.0) {
     return H;
 }
 
-// TODO: Temporary value - will be replaced with proper calculation
-const double TEMP_AMPLIFICATION = 50.0;
+// Calculate moment distribution along beam
+// For vortex-induced vibration, approximate as distributed load over length
+// Different formulas depending on boundary condition
+inline double calculate_moment_at_x(double x_m, double L_m, double F_kN, const std::string& bc_name) {
+    // Simplified: assume uniform distributed load w = F/L
+    // More accurate would use modal superposition
+    double w_kN_m = F_kN / L_m;  // Equivalent UDL
+
+    if (bc_name.find("Cantilever") != std::string::npos || bc_name.find("Fixed-Free") != std::string::npos) {
+        // Cantilever with UDL: M(x) = w*(L-x)²/2
+        double remaining = L_m - x_m;
+        return w_kN_m * remaining * remaining / 2.0;  // kN·m
+    } else if (bc_name.find("Simple") != std::string::npos || bc_name.find("Hinged-Hinged") != std::string::npos) {
+        // Simply supported with UDL: M(x) = w*x*(L-x)/2
+        return w_kN_m * x_m * (L_m - x_m) / 2.0;  // kN·m
+    } else if (bc_name.find("Built-in") != std::string::npos || bc_name.find("Fixed-Fixed") != std::string::npos) {
+        // Fixed-fixed with UDL: M(x) = w*(L²/12 - Lx/2 + x²/2)
+        return w_kN_m * (L_m*L_m/12.0 - L_m*x_m/2.0 + x_m*x_m/2.0);  // kN·m
+    } else {
+        // Default to simple support
+        return w_kN_m * x_m * (L_m - x_m) / 2.0;  // kN·m
+    }
+}
+
+// Calculate bending stress from moment
+// σ = M * c / I where c = D/2 (distance to extreme fiber)
+inline double calculate_stress_from_moment(double M_kNm, double D_mm, double I_m4) {
+    // Convert M from kN·m to N·m
+    double M_Nm = M_kNm * 1000.0;
+
+    // Distance to extreme fiber (m)
+    double c_m = (D_mm / 1000.0) / 2.0;  // mm → m, then /2
+
+    // σ = Mc/I (Pa)
+    double stress_Pa = (M_Nm * c_m) / I_m4;
+
+    // Convert to MPa
+    return stress_Pa / 1.0e6;  // Pa → MPa
+}
+
+// Calculate equivalent uniform distributed load
+// w = 8F/L for simply supported beam with center load equivalent
+inline double calculate_UDL(double F_kN, double L_m) {
+    return F_kN / L_m;  // Simplified: total force / length (kN/m)
+}
+
+// Calculate full distribution for visualization (100 points along beam)
+inline DistributionData calculate_distribution(double F_kN, double L_m, double D_mm,
+                                               double I_m4, const std::string& bc_name) {
+    DistributionData dist;
+    const int num_points = 100;
+
+    dist.udl_kN_m = calculate_UDL(F_kN, L_m);
+    dist.max_moment_kNm = 0.0;
+    dist.max_stress_MPa = 0.0;
+
+    for (int i = 0; i <= num_points; i++) {
+        double x = (static_cast<double>(i) / num_points) * L_m;
+        dist.x_m.push_back(x);
+
+        double M = calculate_moment_at_x(x, L_m, F_kN, bc_name);
+        dist.moment_kNm.push_back(M);
+
+        double sigma = calculate_stress_from_moment(M, D_mm, I_m4);
+        dist.stress_MPa.push_back(sigma);
+
+        if (M > dist.max_moment_kNm) dist.max_moment_kNm = M;
+        if (sigma > dist.max_stress_MPa) dist.max_stress_MPa = sigma;
+    }
+
+    return dist;
+}
 
 // Analyze a single mode
 inline ModeResult analyze_mode(const HSS_Member& member, const BoundaryCondition& bc, int mode) {
     ModeResult result;
     result.mode_number = mode;
 
+    // Convert material E from GPa to Pa for calculation
+    double E_Pa = member.material.E_GPa * 1.0e9;  // GPa → Pa
+
+    // Convert D from mm to m for calculations
+    double D_m = member.D_mm / 1000.0;  // mm → m
+
     // 1. Natural frequency
     result.omega = calculate_natural_frequency(
-        member.material.E_psi,
-        member.I,
-        member.mu,
-        member.L,
+        E_Pa,
+        member.I_m4,
+        member.mu_kg_m,
+        member.L_m,
         bc.A_coeffs[mode]
     );
     result.freq_hz = result.omega / (2.0 * PI);
 
     // 2. Critical wind speed
-    result.omega_D2 = result.omega * member.D * member.D;
-    result.V_critical = calculate_critical_wind_speed(result.omega, member.D);
+    result.omega_D2 = result.omega * D_m * D_m;  // m²·rad/s
+    result.V_critical_ms = calculate_critical_wind_speed(result.omega, D_m);
 
     // 3. Static force
-    result.F_static = calculate_static_force(
-        result.V_critical,
-        member.D,
-        member.L,
+    double F_N = calculate_static_force(
+        result.V_critical_ms,
+        D_m,
+        member.L_m,
         member.damping_ratio,
-        member.mu
+        member.mu_kg_m
     );
+    result.F_static_kN = F_N / 1000.0;  // N → kN
 
     // 4. Axial effect on frequency
-    result.alpha = (result.F_static * member.L * member.L) / (member.material.E_psi * member.I * PI * PI);
+    result.alpha = (F_N * member.L_m * member.L_m) / (E_Pa * member.I_m4 * PI * PI);
     result.omega_axial = calculate_axial_frequency(
         result.omega,
-        result.F_static,
-        member.L,
-        member.material.E_psi,
-        member.I,
+        F_N,
+        member.L_m,
+        E_Pa,
+        member.I_m4,
         mode
     );
 
-    // 5. Dynamic amplification
-    // TODO: Use proper calculation instead of temporary value
-    result.amplification = TEMP_AMPLIFICATION;  // calculate_amplification(member.damping_ratio, 1.0);
+    // 5. Dynamic amplification (at resonance, r = 1.0)
+    result.amplification = calculate_amplification(member.damping_ratio, 1.0);
 
-    // Velocity pressure for reference
-    result.qh = 0.5 * 7.346e-5 * result.V_critical * result.V_critical;
+    // Velocity pressure for reference (Pa)
+    const double rho_air = 1.225;  // kg/m³
+    result.qh_Pa = 0.5 * rho_air * result.V_critical_ms * result.V_critical_ms;
+
+    // 6. Calculate moment/stress/UDL distributions for visualization
+    result.distribution = calculate_distribution(
+        result.F_static_kN,
+        member.L_m,
+        member.D_mm,
+        member.I_m4,
+        bc.name
+    );
 
     return result;
 }
@@ -296,20 +404,33 @@ inline std::vector<VortexResults> analyze_member(const HSS_Member& member, int n
 // Fixed-Fixed: y(x) = (1 - cos(2πnx/L))
 // Fixed-Hinged: y(x) = sin(πnx/L) - sinh(βnx/L) (approximate)
 // Hinged-Hinged: y(x) = sin(πnx/L)
+// Cantilever: y(x) = sin((2n-1)πx/2L) (approximate)
 inline double modal_shape(double x, double L, const std::string& bc_name, int mode) {
     double xi = x / L;  // Normalized position [0, 1]
 
-    if (bc_name == "Hinged-Hinged") {
+    // Use substring matching since BC names include descriptions like "(Simple)", "(Built-in)"
+    if (bc_name.find("Hinged-Hinged") != std::string::npos) {
+        // Simply supported: pure sine wave
         return std::sin(mode * PI * xi);
-    } else if (bc_name == "Fixed-Fixed") {
-        // Approximate as (1 - cos(2πnξ))
+    } else if (bc_name.find("Fixed-Fixed") != std::string::npos) {
+        // Built-in: approximate as (1 - cos(2πnξ))
         return 1.0 - std::cos(2.0 * PI * mode * xi);
-    } else if (bc_name == "Fixed-Hinged") {
-        // Simplified: use sine with slight modification
+    } else if (bc_name.find("Fixed-Hinged") != std::string::npos) {
+        // Mixed: sine with slight modification
         return std::sin(mode * PI * xi) * (1.0 + 0.3 * xi);
+    } else if (bc_name.find("Cantilever") != std::string::npos || bc_name.find("Fixed-Free") != std::string::npos) {
+        // Cantilever: approximate with modified sine
+        return std::sin((2.0 * mode - 1.0) * PI * xi / 2.0);
+    } else if (bc_name.find("Free-Free") != std::string::npos) {
+        // Free-free: similar to fixed-fixed but phase shifted
+        return std::cos(mode * PI * xi);
+    } else if (bc_name.find("Hinged-Free") != std::string::npos) {
+        // Hinged-Free: similar to fixed-hinged but mirrored
+        return std::sin(mode * PI * xi) * (1.0 + 0.3 * (1.0 - xi));
     }
 
-    return 0.0;
+    // Fallback: simple sine wave
+    return std::sin(mode * PI * xi);
 }
 
 } // namespace VortexPhysics
