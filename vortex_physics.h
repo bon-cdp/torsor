@@ -431,23 +431,23 @@ inline double modal_shape(double x, double L, const std::string& bc_name, int mo
 
     // Use substring matching since BC names include descriptions like "(Simple)", "(Built-in)"
     if (bc_name.find("Hinged-Hinged") != std::string::npos) {
-        // Simply supported: pure sine wave
+        // Simply supported: pure sine wave (symmetric)
         return std::sin(mode * PI * xi);
     } else if (bc_name.find("Fixed-Fixed") != std::string::npos) {
         // Built-in: approximate as (1 - cos(2πnξ))
         return 1.0 - std::cos(2.0 * PI * mode * xi);
     } else if (bc_name.find("Fixed-Hinged") != std::string::npos) {
-        // Mixed: sine with slight modification
-        return std::sin(mode * PI * xi) * (1.0 + 0.3 * xi);
+        // Fixed at left, hinged at right: amplitude grows toward right
+        return std::sin(mode * PI * xi) * (0.5 + 0.5 * xi);
+    } else if (bc_name.find("Hinged-Free") != std::string::npos) {
+        // Hinged at left, free at right: strong bias toward free end
+        return std::sin((2.0 * mode - 1.0) * PI * xi / 2.0) * (1.0 + xi);
     } else if (bc_name.find("Cantilever") != std::string::npos || bc_name.find("Fixed-Free") != std::string::npos) {
-        // Cantilever: approximate with modified sine
+        // Cantilever: fixed at left, free at right
         return std::sin((2.0 * mode - 1.0) * PI * xi / 2.0);
     } else if (bc_name.find("Free-Free") != std::string::npos) {
-        // Free-free: similar to fixed-fixed but phase shifted
+        // Free-free: cosine mode (symmetric)
         return std::cos(mode * PI * xi);
-    } else if (bc_name.find("Hinged-Free") != std::string::npos) {
-        // Hinged-Free: similar to fixed-hinged but mirrored
-        return std::sin(mode * PI * xi) * (1.0 + 0.3 * (1.0 - xi));
     }
 
     // Fallback: simple sine wave
