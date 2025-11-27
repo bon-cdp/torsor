@@ -249,19 +249,22 @@ Element render_visualizations(const AppState& state) {
 
         mode_shapes.push_back(ftxui::canvas(std::move(combined_canvas)));
 
-        // Mode info with max deflection
+        // Mode info with max deflection and scale
         std::ostringstream scale_info;
-        scale_info << "Max deflection: " << std::fixed << std::setprecision(3) << max_deflection;
+        scale_info << "Max: " << std::fixed << std::setprecision(4) << max_deflection
+                   << " | Scale: " << std::fixed << std::setprecision(1) << scale_factor;
         mode_shapes.push_back(text(scale_info.str()) | color(Color::GrayLight) | dim);
 
-        // Mode legends
+        // Mode legends with intermediate values
         for (const auto& mode_res : result.modes) {
             std::ostringstream oss;
             oss << "Mode " << mode_res.mode_number << ": "
-                << std::fixed << std::setprecision(1) << mode_res.freq_hz << " Hz, "
-                << std::fixed << std::setprecision(1) << mode_res.V_critical_ms << " m/s";
+                << std::fixed << std::setprecision(2) << mode_res.freq_hz << " Hz | "
+                << std::fixed << std::setprecision(2) << mode_res.V_critical_ms << " m/s | "
+                << std::fixed << std::setprecision(3) << mode_res.F_static_kN << " kN | "
+                << "H=" << std::fixed << std::setprecision(1) << mode_res.amplification;
 
-            mode_shapes.push_back(text(oss.str()) | color(Color::GrayLight));
+            mode_shapes.push_back(text(oss.str()) | color(Color::GrayLight) | dim);
         }
 
         bc_panels.push_back(vbox(mode_shapes) | border);
@@ -349,7 +352,7 @@ Element render_inputs(const AppState& state) {
     };
 
     return vbox({
-        text("═══ INPUTS (Tab to cycle, ↑↓ to adjust, Shift to change color mapping) ═══") | color(Color::Cyan) | center,
+        text("═══ INPUTS (Tab to cycle, ↑↓ to adjust) ═══") | color(Color::Cyan) | center,
         text(""),
         hbox({
             vbox({
