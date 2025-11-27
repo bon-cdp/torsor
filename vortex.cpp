@@ -254,7 +254,7 @@ Element render_visualizations(const AppState& state) {
         std::ostringstream scale_info;
         scale_info << "Max: " << std::fixed << std::setprecision(4) << max_deflection
                    << " | Scale: " << std::fixed << std::setprecision(1) << scale_factor;
-        mode_shapes.push_back(text(scale_info.str()) | color(Color::GrayLight) | dim);
+        mode_shapes.push_back(text(scale_info.str()));  // Default color
 
         // Mode legends with intermediate values (split into multiple lines for readability)
         for (const auto& mode_res : result.modes) {
@@ -264,21 +264,21 @@ Element render_visualizations(const AppState& state) {
                  << "f=" << std::fixed << std::setprecision(2) << mode_res.freq_hz << " Hz"
                  << " | ω=" << std::fixed << std::setprecision(2) << mode_res.omega << " rad/s"
                  << " | V=" << std::fixed << std::setprecision(3) << mode_res.V_critical_ms << " m/s";
-            mode_shapes.push_back(text(oss1.str()) | color(Color::GrayLight) | dim);
+            mode_shapes.push_back(text(oss1.str()));  // Default color
 
             // Line 2: Force, stress, and Strouhal number
             std::ostringstream oss2;
             oss2 << "  F=" << std::fixed << std::setprecision(4) << mode_res.F_static_kN << " kN"
                  << " | σ_max=" << std::fixed << std::setprecision(2) << mode_res.distribution.max_stress_MPa << " MPa"
                  << " | S=" << std::fixed << std::setprecision(3) << mode_res.strouhal;
-            mode_shapes.push_back(text(oss2.str()) | color(Color::GrayLight) | dim);
+            mode_shapes.push_back(text(oss2.str()));  // Default color
 
             // Line 3: Amplification and damping parameters
             std::ostringstream oss3;
             oss3 << "  H=" << std::fixed << std::setprecision(1) << mode_res.amplification
                  << " | ωD²=" << std::fixed << std::setprecision(4) << mode_res.omega_D2 << " m²rad/s"
                  << " | ζ_eff=" << std::fixed << std::setprecision(5) << mode_res.damping_param;
-            mode_shapes.push_back(text(oss3.str()) | color(Color::GrayLight) | dim);
+            mode_shapes.push_back(text(oss3.str()));  // Default color
         }
 
         bc_panels.push_back(vbox(mode_shapes) | border);
