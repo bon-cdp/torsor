@@ -88,6 +88,7 @@ struct AppState {
     double t_mm = 6.0;           // Wall thickness (mm)
     double L_m = 6.0;            // Length (m)
     double damping = 0.01;       // 1% damping (typical for steel)
+    double axial_force_kN = 0.0; // Axial force (kN, positive = tension)
 
     // Custom material (if selected)
     double custom_E_GPa = 200.0;       // Young's modulus (GPa)
@@ -119,8 +120,8 @@ struct AppState {
         // Calculate derived properties
         member.calculate_properties();
 
-        // Run vortex analysis
-        results = VortexPhysics::analyze_member(member, 2);
+        // Run vortex analysis with axial force
+        results = VortexPhysics::analyze_member(member, 2, axial_force_kN);
     }
 };
 
@@ -255,22 +256,48 @@ Element render_visualizations(const AppState& state) {
                    << " | Scale: " << std::fixed << std::setprecision(1) << scale_factor;
         mode_shapes.push_back(text(scale_info.str()) | color(Color::GrayLight) | dim);
 
-        // Mode legends with intermediate values
+        // Mode legends with intermediate values (split into multiple lines for readability)
         for (const auto& mode_res : result.modes) {
-            std::ostringstream oss;
-            oss << "Mode " << mode_res.mode_number << ": "
-                << std::fixed << std::setprecision(2) << mode_res.freq_hz << " Hz | "
-                << std::fixed << std::setprecision(2) << mode_res.V_critical_ms << " m/s | "
-                << std::fixed << std::setprecision(3) << mode_res.F_static_kN << " kN | "
-                << "H=" << std::fixed << std::setprecision(1) << mode_res.amplification;
+            // Line 1: Basic frequency and wind speed
+            std::ostringstream oss1;
+            oss1 << "Mode " << mode_res.mode_number << ": "
+                 << "f=" << std::fixed << std::setprecision(2) << mode_res.freq_hz << " Hz"
+                 << " | ω=" << std::fixed << std::setprecision(2) << mode_res.omega << " rad/s"
+                 << " | V=" << std::fixed << std::setprecision(3) << mode_res.V_critical_ms << " m/s";
+            mode_shapes.push_back(text(oss1.str()) | color(Color::GrayLight) | dim);
 
-            mode_shapes.push_back(text(oss.str()) | color(Color::GrayLight) | dim);
+            // Line 2: Force, stress, and Strouhal number
+            std::ostringstream oss2;
+            oss2 << "  F=" << std::fixed << std::setprecision(4) << mode_res.F_static_kN << " kN"
+                 << " | σ_max=" << std::fixed << std::setprecision(2) << mode_res.distribution.max_stress_MPa << " MPa"
+                 << " | S=" << std::fixed << std::setprecision(3) << mode_res.strouhal;
+            mode_shapes.push_back(text(oss2.str()) | color(Color::GrayLight) | dim);
+
+            // Line 3: Amplification and damping parameters
+            std::ostringstream oss3;
+            oss3 << "  H=" << std::fixed << std::setprecision(1) << mode_res.amplification
+                 << " | ωD²=" << std::fixed << std::setprecision(4) << mode_res.omega_D2 << " m²rad/s"
+                 << " | ζ_eff=" << std::fixed << std::setprecision(5) << mode_res.damping_param;
+            mode_shapes.push_back(text(oss3.str()) | color(Color::GrayLight) | dim);
         }
 
         bc_panels.push_back(vbox(mode_shapes) | border);
     }
 
-    return hbox(bc_panels) | center;
+    // Arrange BC panels in 2 rows of 3 for better visibility
+    std::vector<Element> top_row, bottom_row;
+    for (size_t i = 0; i < bc_panels.size(); i++) {
+        if (i < 3) {
+            top_row.push_back(bc_panels[i]);
+        } else {
+            bottom_row.push_back(bc_panels[i]);
+        }
+    }
+
+    return vbox({
+        hbox(top_row) | center,
+        hbox(bottom_row) | center
+    });
 }
 
 // Color legend panel
@@ -310,20 +337,23 @@ Element render_color_legend(const AppState& state) {
 
     // Format max value
     std::ostringstream max_str;
-    max_str << std::fixed << std::setprecision(2) << max_value << " " << units;
+    max_str << std::fixed << std::setprecision(3) << max_value;
 
     return vbox({
         hbox({
             text("Showing: ") | color(Color::GrayLight),
             text(var_name) | bold | color(Color::Yellow),
             text(" (" + units + ")") | color(Color::GrayLight),
-            text("  [Space to cycle]") | color(Color::GrayDark)
+            text("  [Space to cycle]") | color(Color::GrayDark),
+            text("  │  ") | color(Color::GrayDark),
+            text("MAX = ") | color(Color::GrayLight),
+            text(max_str.str() + " " + units) | bold | color(Color::Red)
         }) | center,
         hbox(gradient) | center,
         hbox({
-            text("0.0 " + units) | color(Color::GrayLight),
-            text(" ──────────── ") | color(Color::GrayDark),
-            text(max_str.str()) | color(Color::GrayLight)
+            text("0.0") | color(Color::Blue),
+            text(" ───────────── ") | color(Color::GrayDark),
+            text(max_str.str()) | color(Color::Red)
         }) | center
     }) | border;
 }
@@ -334,11 +364,12 @@ Element render_inputs(const AppState& state) {
                         ? MATERIALS[state.material_index].name
                         : "Custom";
 
-    std::ostringstream oss_D, oss_t, oss_L, oss_damp;
+    std::ostringstream oss_D, oss_t, oss_L, oss_damp, oss_axial;
     oss_D << std::fixed << std::setprecision(1) << state.D_mm;
     oss_t << std::fixed << std::setprecision(2) << state.t_mm;
     oss_L << std::fixed << std::setprecision(1) << state.L_m;
     oss_damp << std::fixed << std::setprecision(4) << state.damping;
+    oss_axial << std::fixed << std::setprecision(1) << state.axial_force_kN;
 
     auto highlight_if_active = [&](int index, const std::string& label, const std::string& value) {
         auto elem = hbox({
@@ -364,14 +395,26 @@ Element render_inputs(const AppState& state) {
             vbox({
                 highlight_if_active(3, "Length (L)", oss_L.str() + " m"),
                 highlight_if_active(4, "Damping (ζ)", oss_damp.str()),
-                text(""),
+                highlight_if_active(5, "Axial Force (F)", oss_axial.str() + " kN"),
             }) | flex,
             separator(),
             vbox({
                 text("Calculated:") | color(Color::GrayLight),
-                text("  I = " + std::to_string(state.member.I_m4 * 1e12).substr(0, 6) + " mm⁴") | color(Color::GrayLight),
-                text("  A = " + std::to_string(state.member.A_m2 * 1e6).substr(0, 6) + " mm²") | color(Color::GrayLight),
-                text("  μ = " + std::to_string(state.member.mu_kg_m).substr(0, 6) + " kg/m") | color(Color::GrayLight),
+                [&]() {
+                    std::ostringstream oss;
+                    oss << "  I = " << std::fixed << std::setprecision(0) << (state.member.I_m4 * 1e12) << " mm⁴";
+                    return text(oss.str()) | color(Color::GrayLight);
+                }(),
+                [&]() {
+                    std::ostringstream oss;
+                    oss << "  A = " << std::fixed << std::setprecision(1) << (state.member.A_m2 * 1e6) << " mm²";
+                    return text(oss.str()) | color(Color::GrayLight);
+                }(),
+                [&]() {
+                    std::ostringstream oss;
+                    oss << "  μ = " << std::fixed << std::setprecision(2) << state.member.mu_kg_m << " kg/m";
+                    return text(oss.str()) | color(Color::GrayLight);
+                }(),
             }) | flex
         }),
         separator(),
@@ -413,7 +456,7 @@ int main() {
 
         // Tab: cycle active input
         if (event == Event::Tab) {
-            state.active_input = (state.active_input + 1) % 5;
+            state.active_input = (state.active_input + 1) % 6;  // 6 inputs now
             return true;
         }
 
@@ -443,6 +486,7 @@ int main() {
                 case 2: state.t_mm += 0.5; break;      // Increment by 0.5mm
                 case 3: state.L_m += 0.5; break;       // Increment by 0.5m
                 case 4: state.damping += 0.001; break;
+                case 5: state.axial_force_kN += 10.0; break;  // Increment by 10kN
             }
             changed = true;
         }
@@ -454,6 +498,7 @@ int main() {
                 case 2: if (state.t_mm > 1.0) state.t_mm -= 0.5; break;
                 case 3: if (state.L_m > 1.0) state.L_m -= 0.5; break;
                 case 4: if (state.damping > 0.001) state.damping -= 0.001; break;
+                case 5: state.axial_force_kN -= 10.0; break;  // Can be negative (compression)
             }
             changed = true;
         }

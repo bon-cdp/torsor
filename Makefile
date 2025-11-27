@@ -9,9 +9,11 @@ HEADERS = tensorcad_core.h tensorcad_geometry.h tensorcad_assembly.h tensorcad_r
 FTXUI_INCLUDE = -I/opt/homebrew/opt/ftxui/include
 FTXUI_LIBS = -L/opt/homebrew/opt/ftxui/lib -lftxui-component -lftxui-dom -lftxui-screen
 
-.PHONY: all clean help
+.PHONY: all clean help test
 
 all: tensorcad assembly_designer vortex
+
+test: test_vortex
 
 tensorcad: main.cpp $(HEADERS)
 	@echo "Building geometric modeling tool..."
@@ -27,6 +29,13 @@ vortex: vortex.cpp vortex_physics.h
 	@echo "Building vortex shedding calculator (v0.1)..."
 	$(CXX) $(CXXFLAGS) $(FTXUI_INCLUDE) vortex.cpp $(FTXUI_LIBS) -o vortex
 	@echo "✓ Built: ./vortex"
+
+test_vortex: test_vortex.cpp vortex_physics.h
+	@echo "Building vortex test suite..."
+	$(CXX) $(CXXFLAGS) test_vortex.cpp -o test_vortex
+	@echo "✓ Built: ./test_vortex"
+	@echo "Running tests..."
+	@./test_vortex
 
 clean:
 	@echo "Cleaning build artifacts..."
