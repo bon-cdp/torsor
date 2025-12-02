@@ -178,16 +178,20 @@ Element render_warning_banner(const AppState& state) {
         return text("");
     }
 
-    // Find worst warning level
+    // Check if there are any non-SAFE warnings
+    bool has_risk = false;
     WindData::WarningLevel worst_level = WindData::SAFE;
     for (size_t i = 0; i < state.warnings.size(); i++) {
-        if (state.warnings[i].level > worst_level) {
-            worst_level = state.warnings[i].level;
+        if (state.warnings[i].level > WindData::SAFE) {
+            has_risk = true;
+            if (state.warnings[i].level > worst_level) {
+                worst_level = state.warnings[i].level;
+            }
         }
     }
 
-    // Only show banner if there's any risk (not SAFE)
-    if (worst_level == WindData::SAFE) {
+    // Only show banner if there's actual risk detected
+    if (!has_risk) {
         return text("");
     }
 
@@ -674,7 +678,6 @@ int main() {
     auto component = Renderer([&] {
         return vbox({
             render_header(),
-            render_warning_banner(state),  // Warning banner
             separator(),
             render_visualizations(state) | flex,
             separator(),
