@@ -1,14 +1,16 @@
 #ifndef VORTEX_PHYSICS_H
 #define VORTEX_PHYSICS_H
 
-// Torsor v0.1: Vortex Shedding Analysis - Physics Engine
+// Torsor v0.2: Vortex Shedding Analysis - Physics Engine
 // Calculates natural frequencies, critical wind speeds, and dynamic forces
 // for HSS round members under vortex-induced vibration
+// Includes wind climate database and engineering warnings
 
 #include <cmath>
 #include <string>
 #include <vector>
 #include <array>
+#include "wind_data.h"  // Wind climate database and warning system
 
 const double PI = 3.14159265358979323846;
 
@@ -137,6 +139,37 @@ struct ModeResult {
 struct VortexResults {
     std::string bc_name;       // Boundary condition name
     std::vector<ModeResult> modes;  // Results for each mode
+};
+
+// Damping uncertainty range results
+// Shows how results vary across typical damping range (0.005 to 0.02)
+struct DampingRange {
+    double damping_min;        // Minimum damping ratio (typically 0.005)
+    double damping_nominal;    // Nominal damping ratio (typically 0.01)
+    double damping_max;        // Maximum damping ratio (typically 0.02)
+
+    ModeResult result_min;     // Results at minimum damping (worst case - highest forces)
+    ModeResult result_nominal; // Results at nominal damping
+    ModeResult result_max;     // Results at maximum damping (best case - lowest forces)
+
+    // Helper to get range as string
+    std::string get_stress_range_str() const {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%.1f [%.1f-%.1f]",
+                 result_nominal.distribution.max_stress_MPa,
+                 result_max.distribution.max_stress_MPa,  // Max damping → min stress
+                 result_min.distribution.max_stress_MPa); // Min damping → max stress
+        return std::string(buf);
+    }
+
+    std::string get_force_range_str() const {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%.3f [%.3f-%.3f]",
+                 result_nominal.F_static_kN * result_nominal.amplification,
+                 result_max.F_static_kN * result_max.amplification,
+                 result_min.F_static_kN * result_min.amplification);
+        return std::string(buf);
+    }
 };
 
 // ============================================================================
@@ -398,6 +431,37 @@ inline ModeResult analyze_mode(const HSS_Member& member, const BoundaryCondition
     );
 
     return result;
+}
+
+// Analyze a mode with damping uncertainty range
+// Computes results for minimum, nominal, and maximum damping values
+// Typical range: 0.005 (bare steel, low damping) to 0.02 (with attachments, bolted connections)
+inline DampingRange analyze_mode_with_damping_range(
+    const HSS_Member& member,
+    const BoundaryCondition& bc,
+    int mode,
+    double axial_force_kN = 0.0,
+    double damping_min = 0.005,
+    double damping_max = 0.02
+) {
+    DampingRange range;
+    range.damping_min = damping_min;
+    range.damping_nominal = member.damping_ratio;
+    range.damping_max = damping_max;
+
+    // Create modified members with different damping ratios
+    HSS_Member member_min = member;
+    member_min.damping_ratio = damping_min;
+
+    HSS_Member member_max = member;
+    member_max.damping_ratio = damping_max;
+
+    // Calculate results for all three damping values
+    range.result_min = analyze_mode(member_min, bc, mode, axial_force_kN);
+    range.result_nominal = analyze_mode(member, bc, mode, axial_force_kN);
+    range.result_max = analyze_mode(member_max, bc, mode, axial_force_kN);
+
+    return range;
 }
 
 // Analyze all boundary conditions and modes

@@ -9,6 +9,10 @@ HEADERS = tensorcad_core.h tensorcad_geometry.h tensorcad_assembly.h tensorcad_r
 FTXUI_INCLUDE = -I/opt/homebrew/opt/ftxui/include
 FTXUI_LIBS = -L/opt/homebrew/opt/ftxui/lib -lftxui-component -lftxui-dom -lftxui-screen
 
+# libHaru paths (for PDF reports)
+HARU_INCLUDE = -I/opt/homebrew/opt/libharu/include
+HARU_LIBS = -L/opt/homebrew/opt/libharu/lib -lhpdf
+
 .PHONY: all clean help test
 
 all: tensorcad assembly_designer vortex
@@ -25,9 +29,9 @@ assembly_designer: assembly_designer.cpp
 	$(CXX) $(CXXFLAGS) assembly_designer.cpp -o assembly_designer
 	@echo "✓ Built: ./assembly_designer"
 
-vortex: vortex.cpp vortex_physics.h
-	@echo "Building vortex shedding calculator (v0.1)..."
-	$(CXX) $(CXXFLAGS) $(FTXUI_INCLUDE) vortex.cpp $(FTXUI_LIBS) -o vortex
+vortex: vortex.cpp vortex_physics.h wind_data.h vortex_report.h
+	@echo "Building vortex shedding calculator (v0.2)..."
+	$(CXX) $(CXXFLAGS) $(FTXUI_INCLUDE) $(HARU_INCLUDE) vortex.cpp $(FTXUI_LIBS) $(HARU_LIBS) -o vortex
 	@echo "✓ Built: ./vortex"
 
 test_vortex: test_vortex.cpp vortex_physics.h
